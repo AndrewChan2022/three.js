@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - particles - meshanimation</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - webgl particles waves example
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			const SEPARATION = 100, AMOUNTX = 50, AMOUNTY = 50;
+
+			let container, stats;
+			let camera, scene, renderer;
+			let particles, count = 0;
+			let mouseX = 0, mouseY = 0;
+			let windowHalfX = window.innerWidth / 2;
+			let windowHalfY = window.innerHeight / 2;
+
+			init();
+
+			function init() {
+				container = document.createElement('div');
+				document.body.appendChild(container);
+
+				camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 10000);
+				camera.position.z = 1000;
+
+				scene = new THREE.Scene();
+
+				// Create instanced mesh for spheres
+				const numParticles = AMOUNTX * AMOUNTY;
+				const geometry = new THREE.SphereGeometry(20, 32, 32); // Sphere with radius 20
+				const material = new THREE.MeshPhongMaterial({ color: 0x888888 }); // Gray color with lighting support
+
+				particles = new THREE.InstancedMesh(geometry, material, numParticles);
+				particles.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Allow dynamic updates
+
+				// Dummy object for matrix transformations
+				const dummy = new THREE.Object3D();
+
+				// Position the spheres in a grid
+				let index = 0;
+				for (let ix = 0; ix < AMOUNTX; ix++) {
+					for (let iy = 0; iy < AMOUNTY; iy++) {
+						const x = ix * SEPARATION - ((AMOUNTX * SEPARATION) / 2);
+						const z = iy * SEPARATION - ((AMOUNTY * SEPARATION) / 2);
+						dummy.position.set(x, 0, z);
+						dummy.scale.set(1, 1, 1); // Initial scale
+						dummy.updateMatrix();
+						particles.setMatrixAt(index++, dummy.matrix);
+					}
+				}
+
+				scene.add(particles);
+
+				// Add lighting to make spheres visible
+				const ambientLight = new THREE.AmbientLight(0x404040); // Soft light
+				scene.add(ambientLight);
+				const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+				directionalLight.position.set(1, 1, 1).normalize();
+				scene.add(directionalLight);
+
+				// Renderer setup
+				renderer = new THREE.WebGLRenderer({ antialias: true });
+				renderer.setPixelRatio(window.devicePixelRatio);
+				renderer.setSize(window.innerWidth, window.innerHeight);
+				renderer.setAnimationLoop(animate);
+				container.appendChild(renderer.domElement);
+
+				stats = new Stats();
+				container.appendChild(stats.dom);
+
+				container.style.touchAction = 'none';
+				container.addEventListener('pointermove', onPointerMove);
+
+				window.addEventListener('resize', onWindowResize);
+			}
+
+			function onWindowResize() {
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize(window.innerWidth, window.innerHeight);
+			}
+
+			function onPointerMove(event) {
+				if (event.isPrimary === false) return;
+				mouseX = event.clientX - windowHalfX;
+				mouseY = event.clientY - windowHalfY;
+			}
+
+			function animate() {
+				render();
+				stats.update();
+			}
+
+			function render() {
+				camera.position.x += (mouseX - camera.position.x) * 0.05;
+				camera.position.y += (-mouseY - camera.position.y) * 0.05;
+				camera.lookAt(scene.position);
+
+				// Update sphere positions and scales
+				const dummy = new THREE.Object3D();
+				let index = 0;
+
+				for (let ix = 0; ix < AMOUNTX; ix++) {
+					for (let iy = 0; iy < AMOUNTY; iy++) {
+						const x = ix * SEPARATION - ((AMOUNTX * SEPARATION) / 2);
+						const z = iy * SEPARATION - ((AMOUNTY * SEPARATION) / 2);
+
+						// Animate y position (wave effect)
+						const y = (Math.sin((ix + count) * 0.3) * 50) + (Math.sin((iy + count) * 0.5) * 50);
+
+						// Animate scale (wave effect)
+						const scale = (Math.sin((ix + count) * 0.3) + 1) * 0.5 + (Math.sin((iy + count) * 0.5) + 1) * 0.5;
+
+						dummy.position.set(x, y, z);
+						dummy.scale.set(scale, scale, scale);
+						dummy.updateMatrix();
+						particles.setMatrixAt(index++, dummy.matrix);
+					}
+				}
+
+				particles.instanceMatrix.needsUpdate = true;
+
+				renderer.render(scene, camera);
+				count += 0.1;
+			}
+
+		</script>
+	</body>
+</html>

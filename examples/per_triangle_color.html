@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - per triangle color</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="container"></div>
+		<div id="info"><a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - raw shader demo</div>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			precision mediump float;
+			precision mediump int;
+
+			uniform mat4 modelViewMatrix; // optional
+			uniform mat4 projectionMatrix; // optional
+
+			uniform sampler2D triangleColorTex;
+			uniform float texWidth;
+			uniform float texHeight;
+	  
+			in vec3 position;
+			out vec4 vColor;
+	  
+			void main() {
+			  int triIndex = (gl_VertexID + 0 ) / 3;
+			  int tx = triIndex % int(texWidth);
+			  int ty = triIndex / int(texWidth);
+	  
+			  vec2 uv = (vec2(float(tx), float(ty)) + 0.5) / vec2(texWidth, texHeight);
+			  vColor = texture(triangleColorTex, uv);
+	  
+			  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+			}
+
+		</script>
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			precision highp float;
+			in vec4 vColor;
+			out vec4 outColor;
+	  
+			void main() {
+			  outColor = vec4(float(gl_PrimitiveID), 0.0, 0.0, 1.0) ;
+			}
+
+		</script>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			let container, stats;
+
+			let camera, scene, renderer;
+
+			init();
+
+			function init() {
+
+				container = document.getElementById( 'container' );
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 1, 10 );
+				camera.position.z = 5;
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x101010 );
+
+				// geometry
+				// nr of triangles with 3 vertices per triangle
+				const vertexCount = 200 * 3;
+
+
+				const geometry = new THREE.BufferGeometry();
+				
+				const vertices = new Float32Array( [
+					-1.0, -1.0,  1.0, // v0
+					1.0, -1.0,  1.0, // v1
+					1.0,  1.0,  1.0, // v2
+					-1.0,  1.0,  1.0, // v3
+					-1.0, -1.0,  1.0, // v0
+					1.0,  1.0,  1.0, // v2
+				] );
+
+				const indices = [
+					0, 1, 2,
+					3, 4, 5,
+				];
+
+				geometry.setIndex( indices );
+				geometry.setAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
+
+				console.log({geometry});
+				const indexCount = geometry.index.count; // total indices
+				let triangleCount = indexCount / 3;
+
+				// Create texture with one color per triangle
+				const texWidth = 4;
+				const texHeight = Math.ceil(triangleCount / texWidth);
+				const colorData = new Float32Array(texWidth * texHeight * 4);
+				
+				const colors = [[0,0,1,1], [0,1,0,1], [1,0,0,1], [1,1,1,1], [1,0,1,1], [0,1,1,1], [1,0,0,1]];
+				triangleCount *= 3;
+				for (let i = 0; i < triangleCount; i++) {
+					const color = colors[i%triangleCount];
+					colorData[i * 4 + 0] = color[0]; // R
+					colorData[i * 4 + 1] = color[1]; // G
+					colorData[i * 4 + 2] = color[2]; // B
+					colorData[i * 4 + 3] = 1.0;           // A
+				}
+
+				console.log({colorData});
+				const triangleColorTex = new THREE.DataTexture(
+					colorData,
+					texWidth,
+					texHeight,
+					THREE.RGBAFormat,
+					THREE.FloatType
+				);
+				triangleColorTex.needsUpdate = true;
+				triangleColorTex.magFilter = THREE.NearestFilter;
+				triangleColorTex.minFilter = THREE.NearestFilter;
+
+				// geometry.setAttribute( 'position', positionAttribute );
+				// geometry.setAttribute( 'color', colorAttribute );
+
+				// material
+
+				const material = new THREE.RawShaderMaterial( {
+					glslVersion: THREE.GLSL3,
+
+					uniforms: {
+						triangleColorTex: { value: triangleColorTex },
+						texWidth: { value: texWidth },
+						texHeight: { value: texHeight },
+					},
+					vertexShader: document.getElementById( 'vertexShader' ).textContent,
+					fragmentShader: document.getElementById( 'fragmentShader' ).textContent,
+					side: THREE.DoubleSide,
+					// transparent: true
+
+				} );
+
+				const mesh = new THREE.Mesh( geometry, material );
+				mesh.rotation.y = 0.01;
+				scene.add( mesh );
+
+				renderer = new THREE.WebGLRenderer();
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				container.appendChild( renderer.domElement );
+
+				stats = new Stats();
+				container.appendChild( stats.dom );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function animate() {
+
+				const time = performance.now();
+
+				const object = scene.children[ 0 ];
+
+				// object.rotation.y = time * 0.0005;
+
+				renderer.render( scene, camera );
+
+				stats.update();
+
+			}
+
+		</script>
+
+	</body>
+</html>

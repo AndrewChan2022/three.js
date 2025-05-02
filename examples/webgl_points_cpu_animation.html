@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - particles - cpuanimation</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - webgl particles waves example
+		</div>
+
+		<script type="x-shader/x-vertex" id="vertexshader">
+			attribute float radius; // Sphere radius in world-space units
+			varying float vPointSize;
+			varying float vViewZ; // View-space z-coordinate
+			uniform float screenHeight; // Screen height in pixels
+			uniform float tanFovOver2; // tan(fov / 2)
+
+			void main() {
+				vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+				vViewZ = -mvPosition.z; // View-space z-coordinate (positive)
+				// Compute gl_PointSize based on the sphere's radius
+				gl_PointSize = (radius * screenHeight) / (vViewZ * tanFovOver2);
+				vPointSize = gl_PointSize; // Pass to fragment shader
+				gl_Position = projectionMatrix * mvPosition;
+			}
+		</script>
+
+		<script type="x-shader/x-fragment" id="fragmentshader">
+			uniform vec3 color;
+			uniform vec3 lightDirection;
+			uniform float screenHeight;
+			uniform float tanFovOver2;
+
+			varying float vPointSize;
+			varying float vViewZ;
+
+			void main() {
+				// Map gl_PointCoord to a range of [-1, 1] to treat it as a sphere's surface
+				vec2 coord = gl_PointCoord * 2.0 - 1.0;
+
+				// Calculate the squared distance from the center (avoid sqrt)
+				float dist2 = dot(coord, coord);
+
+				// Use alpha blending to fade out the edges
+				float alpha = smoothstep(1.0, 0.81, dist2);
+				if (alpha < 0.01) discard;
+
+				// Calculate the z-coordinate of the sphere using dist2
+				float z = sqrt(1.0 - dist2);
+
+				// Compute the normal vector for the sphere
+				vec3 normal = normalize(vec3(coord.x, coord.y, z));
+
+				// Simple lighting: calculate the dot product between the normal and light direction
+				vec3 lightDir = normalize(lightDirection);
+				float diffuse = max(0.0, dot(normal, lightDir));
+
+				// Ambient light to prevent completely dark areas
+				float ambient = 0.3;
+
+				// Combine ambient and diffuse lighting
+				float lighting = ambient + diffuse;
+
+				// Apply the lighting to the color
+				gl_FragColor = vec4(color * lighting, alpha);
+
+				// Adjust fragment depth
+				float depthOffset = z * vPointSize * 0.5; // Depth offset in pixels
+
+				// Convert depthOffset from pixels to view-space units
+				float depthOffsetInViewSpace = depthOffset * (2.0 * vViewZ * tanFovOver2 / screenHeight);
+
+				// Convert view-space offset to NDC depth change
+				// Using near = 1, far = 10000: d(z_ndc)/d(z_view) ≈ 0.0002 / z_view^2
+				float deltaZndc = (0.0002 / (vViewZ * vViewZ)) * depthOffsetInViewSpace;
+
+				// Adjust the fragment depth
+				gl_FragDepth = gl_FragCoord.z - deltaZndc;
+			}
+		</script>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+			import * as THREE from 'three';
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			const SEPARATION = 100, AMOUNTX = 50, AMOUNTY = 50;
+
+			let container, stats;
+			let camera, scene, renderer;
+			let particles, count = 0;
+			let mouseX = 0, mouseY = 0;
+			let windowHalfX = window.innerWidth / 2;
+			let windowHalfY = window.innerHeight / 2;
+
+			init();
+
+			function init() {
+				container = document.createElement('div');
+				document.body.appendChild(container);
+
+				camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 10000);
+				camera.position.z = 1000;
+
+				scene = new THREE.Scene();
+
+				// Particle setup
+				const numParticles = AMOUNTX * AMOUNTY;
+				const positions = new Float32Array(numParticles * 3);
+				const radii = new Float32Array(numParticles); // Use radius instead of scale
+
+				let i = 0, j = 0;
+				for (let ix = 0; ix < AMOUNTX; ix++) {
+					for (let iy = 0; iy < AMOUNTY; iy++) {
+						positions[i] = ix * SEPARATION - ((AMOUNTX * SEPARATION) / 2); // x
+						positions[i + 1] = 0; // y
+						positions[i + 2] = iy * SEPARATION - ((AMOUNTY * SEPARATION) / 2); // z
+						radii[j] = 10; // Initial radius (in world-space units)
+						i += 3;
+						j++;
+					}
+				}
+
+				const geometry = new THREE.BufferGeometry();
+				geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+				geometry.setAttribute('radius', new THREE.BufferAttribute(radii, 1)); // Use radius attribute
+
+				const material = new THREE.ShaderMaterial({
+					uniforms: {
+						color: { value: new THREE.Color(0x888888) },
+						lightDirection: { value: new THREE.Vector3(1, 1, 1).normalize() },
+						screenHeight: { value: window.innerHeight },
+						tanFovOver2: { value: Math.tan((75 * Math.PI / 180) / 2) }
+					},
+					vertexShader: document.getElementById('vertexshader').textContent,
+					fragmentShader: document.getElementById('fragmentshader').textContent,
+					transparent: true
+				});
+
+				particles = new THREE.Points(geometry, material);
+				scene.add(particles);
+
+				renderer = new THREE.WebGLRenderer({ antialias: true });
+				renderer.setPixelRatio(window.devicePixelRatio);
+				renderer.setSize(window.innerWidth, window.innerHeight);
+				renderer.setAnimationLoop(animate);
+				container.appendChild(renderer.domElement);
+
+				stats = new Stats();
+				container.appendChild(stats.dom);
+
+				container.style.touchAction = 'none';
+				container.addEventListener('pointermove', onPointerMove);
+
+				window.addEventListener('resize', onWindowResize);
+			}
+
+			function onWindowResize() {
+				windowHalfX = window.innerWidth / 2;
+				windowHalfY = window.innerHeight / 2;
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize(window.innerWidth, window.innerHeight);
+
+				particles.material.uniforms.screenHeight.value = window.innerHeight;
+			}
+
+			function onPointerMove(event) {
+				if (event.isPrimary === false) return;
+				mouseX = event.clientX - windowHalfX;
+				mouseY = event.clientY - windowHalfY;
+			}
+
+			function animate() {
+				render();
+				stats.update();
+			}
+
+			function render() {
+				camera.position.x += (mouseX - camera.position.x) * 0.05;
+				camera.position.y += (-mouseY - camera.position.y) * 0.05;
+				camera.lookAt(scene.position);
+
+				const positions = particles.geometry.attributes.position.array;
+				const radii = particles.geometry.attributes.radius.array;
+
+				let i = 0, j = 0;
+				for (let ix = 0; ix < AMOUNTX; ix++) {
+					for (let iy = 0; iy < AMOUNTY; iy++) {
+						positions[i + 1] = (Math.sin((ix + count) * 0.3) * 50) +
+						                   (Math.sin((iy + count) * 0.5) * 50);
+						// Animate radius between 10 and 20 world-space units
+						radii[j] = 10 + (Math.sin((ix + count) * 0.3) + 1) * 5 +
+						           (Math.sin((iy + count) * 0.5) + 1) * 5;
+						i += 3;
+						j++;
+					}
+				}
+
+				particles.geometry.attributes.position.needsUpdate = true;
+				particles.geometry.attributes.radius.needsUpdate = true;
+
+				renderer.render(scene, camera);
+				count += 0.1;
+			}
+		</script>
+	</body>
+</html>

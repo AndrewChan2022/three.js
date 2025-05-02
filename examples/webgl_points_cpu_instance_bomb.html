@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>three.js webgl - instanced mesh - keyframe animation</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+        <style>
+            body {
+                margin: 0;
+                overflow: hidden;
+            }
+            #info {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                color: #fff;
+                font-family: Arial, sans-serif;
+                font-size: 14px;
+            }
+            #controls {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: rgba(0, 0, 0, 0.7);
+                color: #fff;
+                padding: 10px;
+                font-family: Arial, sans-serif;
+                font-size: 14px;
+                border-radius: 5px;
+                user-select: none;
+            }
+            #controls label {
+                display: block;
+                margin-bottom: 5px;
+            }
+            #controls input[type="range"], #controls input[type="number"] {
+                width: 100%;
+            }
+            #controls button {
+                margin-top: 5px;
+                padding: 5px 10px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="info">
+            <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - instanced mesh keyframe animation
+        </div>
+        <div id="controls">
+            <label>Radius Scale: <span id="radiusValue">1.0</span>
+                <input type="range" id="radiusSlider" min="0.1" max="15.0" step="0.1" value="1.0">
+            </label>
+            <label>Animation Speed: <span id="speedValue">0.1</span>
+                <input type="range" id="speedSlider" min="0" max="1" step="0.01" value="0.25">
+            </label>
+
+            <!-- <label>Test: <span id="frameValue2">0</span>
+                <input type="range" id="frameSlider2" min="0" max="599" step="1" value="0">
+            </label> -->
+
+            <label>Current Frame: <span id="frameValue">0</span>
+                <input type="range" id="frameSlider" min="0" max="599" step="1" value="0">
+            </label>
+            <label>Particle Stop Frame:
+                <input type="number" id="particleStopInput" min="0" max="599" value="599">
+                <button id="setStopFrame">Set for Particle 0</button>
+            </label>
+            <button id="pauseButton">Pause</button>
+        </div>
+
+        <script type="importmap">
+            {
+                "imports": {
+                    "three": "../build/three.module.js",
+                    "three/addons/": "./jsm/"
+                }
+            }
+        </script>
+
+        <script type="module">
+            import * as THREE from 'three';
+            import Stats from 'three/addons/libs/stats.module.js';
+            import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+            class BombInstanceSystem {
+                constructor({
+                    jsonFile,
+                    binFile,
+                    hitFile,
+                    baseRadiusScale = 300.0,
+                    radiusScale = 1.0,
+                    animationSpeed = 0.1,
+                    scene,
+                    camera
+                }) {
+                    this.jsonFile = jsonFile;
+                    this.binFile = binFile;
+                    this.hitFile = hitFile;
+                    this.radiusScale = radiusScale;
+                    this.baseRadiusScale = baseRadiusScale;
+                    this.animationSpeed = animationSpeed;
+                    this.scene = scene;
+                    this.camera = camera;
+                    this.instancedMesh = null;
+                    this.animationData = null;
+                    this.particleData = null;
+                    this.currentFrame = 0;
+                    this.lastTime = null;
+                    this.dummy = new THREE.Object3D();
+                    this.stopFrames = null;
+                    this.isPlaying = true;
+                }
+
+                generateFakeParticles() {
+                    return {
+                        particle_count: 2,
+                        seconds_per_step: 0.0002,
+                        animation_step_count: 600,
+                        radius: [0.20, 0.20],
+                        group: [1.0, 2.0]
+                    };
+                }
+
+                generateFakeAnimations() {
+                    const numParticles = 2;
+                    const frames = 600;
+                    const floatsPerParticle = 6;
+                    const animationData = new Float32Array(numParticles * frames * floatsPerParticle);
+
+                    for (let frame = 0; frame < frames; frame++) {
+                        let x2;
+                        if (frame <= 299) {
+                            x2 = 0.5 + (100.0 - 0.5) * (frame / 299);
+                        } else {
+                            x2 = 100.0 - (100.0 - 0.5) * ((frame - 300) / 299);
+                        }
+
+                        const offset1 = frame * numParticles * floatsPerParticle;
+                        animationData[offset1 + 0] = 0.0;
+                        animationData[offset1 + 1] = 0.0;
+                        animationData[offset1 + 2] = 0.0;
+                        animationData[offset1 + 3] = 0.0;
+                        animationData[offset1 + 4] = 0.0;
+                        animationData[offset1 + 5] = 0.0;
+
+                        const offset2 = offset1 + floatsPerParticle;
+                        animationData[offset2 + 0] = x2;
+                        animationData[offset2 + 1] = 0.0;
+                        animationData[offset2 + 2] = 0.0;
+                        animationData[offset2 + 3] = 0.0;
+                        animationData[offset2 + 4] = 0.0;
+                        animationData[offset2 + 5] = 0.0;
+                    }
+
+                    return animationData;
+                }
+
+                generateDistinctColors100() {
+                    // Float32Array
+                    const color3 = [
+                        [0.7, 0.7, 0.03],
+                        [0.32, 0.01, 0.30],
+                        [0.30, 0.31, 0.51]
+                    ];
+                    const color100 = [
+                        color3[2],
+                        [0.4787, 0.2216, 0.9768],
+                        [0.0026, 0.9899, 0.0605],
+                        [0.9477, 0.3031, 0.0315],
+                        [0.2578, 0.8715, 0.9967],
+                        [0.0980, 0.0031, 0.0165],
+                        [0.9465, 0.9105, 0.4989],
+                        [0.9628, 0.4883, 0.7299],
+                        [0.0098, 0.3727, 0.0826],
+                        [0.1310, 0.3950, 0.7524],
+                        [0.1039, 0.9915, 0.7012],
+                        [0.6259, 0.3946, 0.2508],
+                        [0.9764, 0.8470, 0.8382],
+                        [0.9616, 0.1265, 0.8382],
+                        [0.8438, 0.9980, 0.0274],
+                        [0.2317, 0.4125, 0.4675],
+                        [0.3715, 0.0389, 0.3288],
+                        [0.8940, 0.0106, 0.3146],
+                        [0.3362, 0.7113, 0.1204],
+                        [0.9617, 0.6516, 0.0300],
+                        [0.5191, 0.7344, 0.5498],
+                        [0.1089, 0.0723, 0.5469],
+                        [0.7630, 0.5215, 0.9857],
+                        [0.7480, 0.7411, 0.9954],
+                        [0.4870, 0.4935, 0.0015],
+                        [0.3804, 0.0348, 0.1045],
+                        [0.5708, 0.3812, 0.4820],
+                        [0.1967, 0.2051, 0.0128],
+                        [0.0624, 0.1708, 0.3499],
+                        [0.6029, 0.0991, 0.0279],
+                        [0.1452, 0.4023, 0.9929],
+                        [0.9780, 0.4721, 0.3801],
+                        [0.9875, 0.0759, 0.6020],
+                        [0.5931, 0.1374, 0.6394],
+                        [0.9894, 0.7092, 0.4382],
+                        [0.9997, 0.8780, 0.0736],
+                        [0.0245, 0.5925, 0.8358],
+                        [0.0796, 0.9838, 0.4467],
+                        [0.0782, 0.8864, 0.8077],
+                        [0.0269, 0.6644, 0.3598],
+                        [0.6360, 0.9742, 0.5433],
+                        [0.7805, 0.9869, 0.9675],
+                        [0.6046, 0.5599, 0.4980],
+                        [0.6809, 0.1687, 0.3653],
+                        [0.7671, 0.4129, 0.0514],
+                        [0.0312, 0.4900, 0.3986],
+                        [0.6658, 0.7360, 0.0144],
+                        [0.9617, 0.6105, 0.6466],
+                        [0.5514, 0.3631, 0.6488],
+                        [0.6069, 0.9929, 0.2979],
+                        [0.9307, 0.9980, 0.7897],
+                        [0.0255, 0.1863, 0.1783],
+                        [0.3943, 0.4556, 0.2533],
+                        [0.0796, 0.0059, 0.2851],
+                        [0.5637, 0.6931, 0.7610],
+                        [0.0945, 0.0301, 0.9990],
+                        [0.8014, 0.0599, 0.9928],
+                        [0.7211, 0.6727, 0.3916],
+                        [0.9942, 0.0607, 0.1972],
+                        [0.7399, 0.3280, 0.9492],
+                        [0.3371, 0.3008, 0.2641],
+                        [0.9694, 0.6621, 0.9861],
+                        [0.5112, 0.6699, 0.3030],
+                        [0.7925, 0.6732, 0.1726],
+                        [0.9546, 0.4294, 0.8604],
+                        [0.6669, 0.0153, 0.4832],
+                        [0.2603, 0.6951, 0.6955],
+                        [0.0113, 0.0102, 0.6928],
+                        [0.3946, 0.1726, 0.0073],
+                        [0.4250, 0.4751, 0.6879],
+                        [0.8230, 0.6578, 0.7771],
+                        [0.2926, 0.1503, 0.2326],
+                        [0.9714, 0.4156, 0.5297],
+                        [0.6690, 0.2812, 0.2793],
+                        [0.6270, 0.9735, 0.7311],
+                        [0.0922, 0.2973, 0.1612],
+                        [0.3881, 0.3288, 0.7713],
+                        [0.4967, 0.6061, 0.9998],
+                        [0.0471, 0.8110, 0.0733],
+                        [0.6765, 0.5010, 0.1601],
+                        [0.9965, 0.5143, 0.0136],
+                        [0.2419, 0.5146, 0.0042],
+                        [0.8603, 0.6570, 0.5290],
+                        [0.4270, 0.3458, 0.0825],
+                        [0.4330, 0.1969, 0.7647],
+                        [0.0381, 0.6880, 0.5339],
+                        [0.7672, 0.7786, 0.6566],
+                        [0.8893, 0.9812, 0.4135],
+                        [0.2748, 0.1840, 0.5122],
+                        [0.5954, 0.2562, 0.4731],
+                        [0.6637, 0.0277, 0.2064],
+                        [0.3698, 0.2566, 0.4407],
+                        [0.8308, 0.8767, 0.9726],
+                        [0.2805, 0.8447, 0.4149],
+                        [0.7067, 0.4514, 0.4417],
+                        [0.0413, 0.3522, 0.5369],
+                        [0.2467, 0.1213, 0.0721],
+                        [0.1209, 0.0184, 0.1635],
+                        [0.1738, 0.5887, 0.7004],
+                        [0.0652, 0.4955, 0.9805],
+                    ];
+                    const colorCount  = color100.length;
+                    if (colorCount  != 100) {
+                        throw new Error(`colorCount ${colorCount } not 100`);
+                    }
+                    return color100;
+                }
+
+                generateDistinctColors(count) {
+                    const goldenAngle = 137.508; // degrees
+                    const colors = [];
+
+                    for (let i = 0; i < count; i++) {
+                        const hue = (i * goldenAngle) % 360;
+                        const color = new THREE.Color();
+                        const h = hue / 360;
+                        const s = 0.7;
+                        const l = 0.5;
+                        color.setHSL(h, s, l);
+                        colors.push(color);
+                    }
+                    return colors;
+                }
+
+                async init() {
+                    // Load particle data
+                    const jsonResponse = await fetch(this.jsonFile);
+                    this.particleData = await jsonResponse.json();
+                    // this.particleData = this.generateFakeParticles();
+                    this.seconds_per_step = this.particleData.seconds_per_step;
+
+                    // Load animation data
+                    const binResponse = await fetch(this.binFile);
+                    const binData = await binResponse.arrayBuffer();
+                    this.animationData = new Float32Array(binData);
+                    // this.animationData = this.generateFakeAnimations();
+
+
+                    const numParticles = this.particleData.particle_count;
+
+                    // Initialize stop frames (default to max frames)
+                    this.stopFrames = new Array(numParticles).fill(this.particleData.animation_step_count - 1);
+
+                    // Create instanced mesh
+                    const geometry = new THREE.SphereGeometry(this.baseRadiusScale, 16, 16);
+                    const material = new THREE.MeshPhongMaterial({
+                        color: 0xffffff
+                    });
+
+                    this.instancedMesh = new THREE.InstancedMesh(geometry, material, numParticles);
+                    this.instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+                    // Create instance color attribute
+                    const colors = new Float32Array(numParticles * 3);
+                    const color = new THREE.Color();
+                    const colorTable = this.generateDistinctColors100();
+                    const colorCount = colorTable.length;
+
+                    // Initialize positions, scales, and colors
+                    const radii = new Float32Array(numParticles);
+                    const floatsPerParticle = 6;
+                    for (let i = 0; i < numParticles; i++) {
+                        const dataOffset = i * floatsPerParticle;
+                        this.dummy.position.set(
+                            this.animationData[dataOffset],
+                            this.animationData[dataOffset + 1],
+                            this.animationData[dataOffset + 2]
+                        );
+                        radii[i] = this.particleData.radius[i];
+                        const scale = radii[i] * this.radiusScale;
+                        this.dummy.scale.set(scale, scale, scale);
+                        this.dummy.updateMatrix();
+                        this.instancedMesh.setMatrixAt(i, this.dummy.matrix);
+
+                        // Set color based on groupId
+                        const groupId = this.particleData.group[i] - 1;
+                        const colorIndex = groupId % colorCount;
+                        const color = colorTable[colorIndex];
+                        colors[i * 3] = color[0];
+                        colors[i * 3 + 1] = color[1];
+                        colors[i * 3 + 2] = color[2];
+
+                        // colors[i * 3] = 1.0;
+                        // colors[i * 3 + 1] = 0.0;
+                        // colors[i * 3 + 2] = 0.0;
+                    }
+
+                    // Add instance color attribute
+                    geometry.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(colors, 3));
+                    this.radii = radii;
+
+                    // Modify material to use instance colors
+                    material.onBeforeCompile = (shader) => {
+                        shader.vertexShader = `
+                            attribute vec3 instanceColor;
+                            varying vec3 vInstanceColor;
+                            ${shader.vertexShader}
+                        `.replace(
+                            `#include <color_vertex>`,
+                            `#include <color_vertex>
+                            vInstanceColor = instanceColor;`
+                        );
+                        shader.fragmentShader = `
+                            varying vec3 vInstanceColor;
+                            ${shader.fragmentShader}
+                        `.replace(
+                            `#include <color_fragment>`,
+                            `#include <color_fragment>
+                            diffuseColor.rgb *= vInstanceColor;`
+                        );
+                    };
+
+                    this.scene.add(this.instancedMesh);
+
+
+                    // load hit data
+                    // const hitResponse = await fetch(this.hitFile);
+                    // this.hitData = await hitResponse.json();
+                    // this.hit_frames = new Float32Array(numParticles)
+                    // for (let index = 0; index < numParticles; index++) {
+                    //     this.hit_frames[index] = this.hitData.hit_frames[index];
+
+                    // }
+                    // for (let index = 0; index < numParticles; index++) {
+                    //     this.setStopFrame(index, this.hit_frames[index]);
+                    // }
+
+                    // Add lighting
+                    const ambientLight = new THREE.AmbientLight(0x404040, 1);
+                    this.scene.add(ambientLight);
+                    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+                    directionalLight.position.set(1, 1, 1).normalize();
+                    this.scene.add(directionalLight);
+                }
+
+                update() {
+                    if (!this.instancedMesh || !this.animationData || !this.particleData) return;
+
+                    if (this.isPlaying) {
+                        const now = performance.now() / 1000;
+                        if (!this.lastTime) this.lastTime = now;
+
+                        const frameTime = this.seconds_per_step / this.animationSpeed;
+                        const elapsed = now - this.lastTime;
+                        const frames = this.particleData.animation_step_count;
+
+                        this.currentFrame = Math.floor(elapsed / frameTime) % frames;
+                    }
+
+                    const numParticles = this.particleData.particle_count;
+                    const floatsPerParticle = 6;
+                    const particlesPerFrame = numParticles * floatsPerParticle;
+
+                    for (let i = 0; i < numParticles; i++) {
+                        const particleFrame = Math.min(this.currentFrame, this.stopFrames[i]);
+                        const frameOffset = particleFrame * particlesPerFrame;
+
+                        const dataOffset = frameOffset + (i * floatsPerParticle);
+                        this.dummy.position.set(
+                            this.animationData[dataOffset],
+                            this.animationData[dataOffset + 1],
+                            this.animationData[dataOffset + 2]
+                        );
+                        const scale = this.radii[i] * this.radiusScale;
+                        this.dummy.scale.set(scale, scale, scale);
+                        this.dummy.updateMatrix();
+                        this.instancedMesh.setMatrixAt(i, this.dummy.matrix);
+                    }
+
+                    this.instancedMesh.instanceMatrix.needsUpdate = true;
+
+                    // Update frame display
+                    // document.getElementById('frameValue').textContent = this.currentFrame;
+                    // document.getElementById('frameSlider').value = this.currentFrame;
+                }
+
+                setRadiusScale(scale) {
+                    this.radiusScale = scale;
+                }
+
+                setAnimationSpeed(speed) {
+                    this.animationSpeed = Math.max(0.001, speed);
+                    this.lastTime = performance.now() / 1000;
+                }
+
+                setCurrentFrame(frame) {
+                    this.currentFrame = frame;
+                    this.isPlaying = false;
+                }
+
+                togglePlayPause() {
+                    this.isPlaying = !this.isPlaying;
+                    if (this.isPlaying) {
+                        this.lastTime = performance.now() / 1000;
+                    }
+                    return this.isPlaying;
+                }
+
+                setStopFrame(particleIndex, frame) {
+                    if (particleIndex >= 0 && particleIndex < this.particleData.particle_count) {
+                        this.stopFrames[particleIndex] = Math.min(frame, this.particleData.animation_step_count - 1);
+                    }
+                }
+            }
+
+            let container, stats;
+            let camera, scene, renderer;
+            let bombSystem;
+            let mouseX = 0, mouseY = 0;
+            let windowHalfX = window.innerWidth / 2;
+            let windowHalfY = window.innerHeight / 2;
+            let controls;
+
+            init();
+
+            async function init() {
+                container = document.createElement('div');
+                document.body.appendChild(container);
+
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                camera.position.z = 250;
+                camera.position.y = 150;
+
+                scene = new THREE.Scene();
+
+                bombSystem = new BombInstanceSystem({
+                    // jsonFile: 'textures/bomb/particles_data_4619.json',
+                    // binFile: 'textures/bomb/particles_data_4619.bin',
+                    // jsonFile: 'textures/bomb/particles_data_6113.json',
+                    // binFile: 'textures/bomb/particles_data_6113.bin',
+                    jsonFile: 'textures/bomb/particles_data_6096.json',
+                    binFile: 'textures/bomb/particles_data_6096.bin',
+                    hitFile: 'textures/bomb/hit_data_6113_30m.json',
+                    baseRadiusScale: 300.0,
+                    radiusScale: 1.0,
+                    animationSpeed: 0.1,
+                    scene,
+                    camera
+                });
+                await bombSystem.init();
+
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setAnimationLoop(animate);
+                container.appendChild(renderer.domElement);
+
+                stats = new Stats();
+                stats.dom.style.position = 'absolute';
+                stats.dom.style.top = '100px';
+                stats.dom.style.right = '600px';
+                container.appendChild(stats.dom);
+
+                // Set up UI event listeners
+                const radiusSlider = document.getElementById('radiusSlider');
+                const radiusValue = document.getElementById('radiusValue');
+                const speedSlider = document.getElementById('speedSlider');
+                const speedValue = document.getElementById('speedValue');
+                const frameSlider = document.getElementById('frameSlider');
+                const frameValue = document.getElementById('frameValue');
+                const particleStopInput = document.getElementById('particleStopInput');
+                const setStopFrameBtn = document.getElementById('setStopFrame');
+                const pauseButton = document.getElementById('pauseButton');
+
+                // Initialize speed display
+                const initialSpeed = 0.1;
+                speedValue.textContent = initialSpeed.toFixed(3);
+                speedSlider.value = 0.25;
+
+                radiusSlider.addEventListener('input', () => {
+                    const value = parseFloat(radiusSlider.value);
+                    bombSystem.setRadiusScale(value);
+                    radiusValue.textContent = value.toFixed(1);
+                });
+
+                speedSlider.addEventListener('input', () => {
+                    const t = parseFloat(speedSlider.value);
+                    const minSpeed = Math.log(0.001);
+                    const maxSpeed = Math.log(10.0);
+                    const logSpeed = minSpeed + (maxSpeed - minSpeed) * t;
+                    const speed = Math.exp(logSpeed);
+                    bombSystem.setAnimationSpeed(speed);
+                    speedValue.textContent = speed.toFixed(3);
+                });
+
+                frameSlider.addEventListener('input', () => {
+                    const frame = parseInt(frameSlider.value);
+                    bombSystem.setCurrentFrame(frame);
+                    frameValue.textContent = frame;
+                });
+                frameSlider.max = bombSystem.particleData.animation_step_count - 1;
+
+                setStopFrameBtn.addEventListener('click', () => {
+                    const frame = parseInt(particleStopInput.value);
+                    bombSystem.setStopFrame(0, frame);
+                });
+                particleStopInput.max = bombSystem.particleData.animation_step_count - 1;
+                particleStopInput.value = bombSystem.particleData.animation_step_count - 1;
+
+                pauseButton.addEventListener('click', () => {
+                    const isPlaying = bombSystem.togglePlayPause();
+                    pauseButton.textContent = isPlaying ? 'Pause' : 'Play';
+                });
+
+                container.style.touchAction = 'none';
+                container.addEventListener('pointermove', onPointerMove);
+                window.addEventListener('resize', onWindowResize);
+
+                controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;  // for smoother motion
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = false;
+                controls.minDistance = 100;
+                controls.maxDistance = 1000;
+                controls.maxPolarAngle = Math.PI / 2;  // optional: limit vertical angle
+            }
+
+            function onWindowResize() {
+                windowHalfX = window.innerWidth / 2;
+                windowHalfY = window.innerHeight / 2;
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            function onPointerMove(event) {
+                if (event.isPrimary === false) return;
+                // mouseX = event.clientX - windowHalfX;
+                // mouseY = event.clientY - windowHalfY;
+            }
+
+            function animate() {
+                render();
+                stats.update();
+            }
+
+            function render() {
+                // camera.position.x += (mouseX - camera.position.x) * 0.02;
+                // camera.position.y += (-mouseY - camera.position.y) * 0.02;
+
+                
+                // controls.update();
+
+                camera.lookAt(scene.position);
+
+                
+
+                bombSystem.update();
+                renderer.render(scene, camera);
+            }
+        </script>
+    </body>
+</html>
